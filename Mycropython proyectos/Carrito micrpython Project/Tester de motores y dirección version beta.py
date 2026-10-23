@@ -77,7 +77,117 @@ while True: # para que sea un ciclo cada que escribas un valor aceptado en la co
     if partes[0] == "pwm": cmd_pwm(valor)
     elif partes[0] == "dir": cmd_dir(valor)
     else: print("Comando desconocido")
+#________________________________________________________________________________________________________________________________________ voy a comentar basicamente toda para entenderme sola btw
+#luces
+datos=Pin(PIN_DATOS, Pin.OUT) #pin 13 de la rasp(creo)
+reloj=Pin(PIN_RELOJ, Pin.OUT) #pin 12 de la rasp(creo)
+estado=0 #guarda que leds estan encendidos 
+
+def enviar(valor):#para enviar los bits al registro de corrimiento
+    for i in range(7,-1,-1): #define el rango para que se repita lo de abajo desde el 7 al 0
+        datos.value((valor>>i)&1)#mueve el bit positivo hasta donde se desea(ejemplo para encender las luces frontales: 0b00001100
+        reloj.value(1)
+        reloj.value(0)#estas dos lineas suben y bajan el clock un pulso
+def poner_luces(mascara,encender):#esta funcion es para que al cambiar los valores de unas luces no cambie el valor de otras
+    global estado
+    if encender:
+        estado|=mascara
+    else:
+        estado &=~mascara &0xFF
+    enviar(estado)
+#______________________________________________________________________________________________________________________________________
+#fotoresistencia
+ldr=ADC(PIN_LDR)#convierte el voltaje dado por la foto resistencia a un numero
+modo_ldr=False #modo ldr, osea si se esta usando la fotoresistencia
+auto_on=None#guarda lo ultimo que leyo la fotoresistencia
+def leer_ldr():#lee el voltaje dado por la fotoresistencia
+    return ldr.read_u16()#devuelve el valor entre 0 y 65535
+
+def actualizar_ldr():
+    global auto_on
+    if not modo_ldr:#si el modo ldr esta desactivado simplemento no hace nada xd
+        return
+    valor=leer_ldr() #lee el valor de la fotoresistencia
+    if valor< OSCURO and auto_on is not True:
+        poner_luces(MASCARA_FRONTAL | MASCARA_TRASERA, True)# el| une ambas mascaras, que son las luces
+        auto_on=True
+        print("LDR: oscuro (", valor, ")-> luces ON")
+    elif valor> CLARO and auto_on is not False:
+        poner_luces(MASCARA_FRONTAL |MASCARA_TRASERA, False)
+        auto_on=False
+        print("LDR: claro (", valor, ")-> luces ON")
+#______________________________________________________________________________________________________________________________________
+#comandos de las luces
+def validar_bool(v):
+    if v not in (0,1):
+        print("Modo LDR activo")#se desactiva con ldr 0, para controlar las luces a mano
+        return False
+    return True
+
+def cmd_lf(v):
+    if not validar_bool(v): return
+    if modo_ldr:
+        print("Modo LDR activo"); return
+    poner_luces(MASCARA_FRONTAL,v==1)
+    print("lf",v)
     
+def cmd_lb(v):
+        if not validar_bool(v): return
+        if modo_ldr:
+            print("modo LDR activo")
+        poner_luces(MASCARA_TRASEA,v=1)
+        print("lb", v)
+        
+def cmd_ll(v):
+        if not validar_bool(v): return
+        if modo_ldr:
+            print("modo LDR activo")
+        poner_luces(MASCARA_TRASEA,v=1)
+        print("ll", v)
+    
+def cmd_lr(v):
+        if not validar_bool(v): return
+        if modo_ldr:
+            print("modo LDR activo")
+        poner_luces(MASCARA_TRASEA,v=1)
+        print("lr", v)
+def cmd_ldr(v):
+        global modo_ldr, auto_on
+        if not validar_bool(v): return
+        modo_ldr =(v==1)
+        auto_on=None
+        print("ldr", v)
+
+def procesar(linea):
+    partes=linea.strip().lower().split()
+    print ("DEBUG recibido:", partes)
+    if len(partes)!=2:
+        print("Formato:comando valor(ej:pwm 3"); return
+    try:
+        valor=int(partes[1])
+    except ValueError:
+        print("El valor debe ser entero");return
+        comando=partes[0]
+        if comando== "pwm":cmd_pwm(valor)
+        elif comando== "dir": cmd_dir(valor)
+        elif comando== "lf": cmd_lf(valor)
+        elif comando== "lb": cmd_lb(valor)
+        elif comando== "ll": cmd_ll(valor)
+        elif comando=="lr": cmd_lr(valor)
+        elif comando=="ldr": cmd_ldr(valor)
+        else: print("Comando desconocido:")
+
+poll= select.poll()
+poll.register(sys.stdin, select.POLLIN)
+
+enviar(0)
+print(">",end="")
+while True:
+    if poll.poll(0):
+        procesar(sys.stdin.readline())
+        print(">", end="")
+    actualizar_ldr
+    sleep_ms(50)        
 """
 Explicación del código para facilitar la guía.
 
