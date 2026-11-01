@@ -1,7 +1,6 @@
 from machine import Pin, PWM
 from time import sleep_ms
-
-DEBUG = False   # True = mensajes de depuración; False = consola limpia
+DEBUG = False   # True para mostrar mensajes de depuración
 
 def log(*args):
     if DEBUG:
@@ -14,7 +13,8 @@ PIN_ENB, PIN_IN3, PIN_IN4 = 19, 20, 21   # Motor 2 (derecho)
 FREQ = 1000                           # frecuencia del PWM en Hz
 MIN_DUTY = int(500 / 1023 * 65535)    # ~32000: mínimo para que giren
 MAX_DUTY = 65535                      # máximo de giro
-TIEMPO_GIRO = 600                     # ms que dura un giro
+TIEMPO_GIRO = 1000                    # ms que dura un giro
+GIRO_INTERNO = 0                      # nivel de la rueda de adentro al girar con dir: 0 = parada (sin reversa)
 POTENCIA_DEFECTO = 2                  # potencia de dir si el carro está parado
 #___________________________________________________________________________________________________________________#
 class Motor:
@@ -66,13 +66,13 @@ def cmd_dir(v):
         izq.mover(n); der.mover(n)
     elif v == -1:                     # izquierda
         print("girando izquierda...")
-        izq.mover(0); der.mover(n)
+        izq.mover(GIRO_INTERNO); der.mover(n)
         sleep_ms(TIEMPO_GIRO); izq.mover(n)
         nivel_actual = n
         print("giro terminado")
     elif v == 1:                      # derecha
         print("girando derecha...")
-        izq.mover(n); der.mover(0)
+        izq.mover(n); der.mover(GIRO_INTERNO)
         sleep_ms(TIEMPO_GIRO); der.mover(n)
         nivel_actual = n
         print("giro terminado")
