@@ -1,2 +1,0 @@
-# Carrito micrpython Project
-
