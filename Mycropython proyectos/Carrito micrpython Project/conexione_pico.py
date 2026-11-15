@@ -1,7 +1,7 @@
 import network, socket, time
-
-SSID = "TU_RED"
-PASSWORD = "TU_CLAVE"
+import motores
+SSID = "Dióxido de Zinc"
+PASSWORD = "Stefano25"
 PORT = 5000
 
 def conectar_wifi():
@@ -9,25 +9,37 @@ def conectar_wifi():
     wlan.active(True)
     wlan.connect(SSID, PASSWORD)
     for _ in range(30):
-        if wlan.isconnected():
+        if wlan.isconnected(): # si esta conectada a la red y la contraseña los dos muestra la IP de la pico
             break
         time.sleep(1)
     if not wlan.isconnected():
         raise RuntimeError("No se pudo conectar al WiFi")
-    print("IP de la Pico:", wlan.ifconfig()[0])
+    print("IP de la Pico:", wlan.ifconfig()[0]) # obtenemos la IP de la Pico para la GUI
 
 def ejecutar(cmd):
     partes = cmd.split()
     if not partes:
-        return "error: comando vacio"
-    if partes[0] == "pwm":
-        # ... llama a tu función de pwm con partes[1]
-        return "ok"
-    if partes[0] == "dir":
-        # ... llama a tu función de dirección con partes[1]
-        return "ok"
+        return "error: comando vacio" 
+    try:
+        if partes[0] == "pwm":
+            v = int(partes[1])
+            if v not in range(-4, 5):
+                return "error: pwm fuera de rango (-4 a 4)"
+            motores.cmd_pwm(v)
+            return "ok"
+        if partes[0] == "dir":
+            v = int(partes[1])
+            if v not in (-1, 0, 1, 2):
+                return "error: dir fuera de rango (-1,0,1,2)"
+            motores.cmd_dir(v)
+            return "ok"
+        if partes[0] == "stop":
+            motores.parar()
+            return "ok"
+    except (ValueError, IndexError):
+        return "error: formato invalido"
     return "error: comando desconocido"
-
+    
 def servidor():
     s = socket.socket()
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
