@@ -6,120 +6,150 @@ def log(*args):
     if DEBUG:
         print(*args)
 #___________________________________________________________________________________________________________________#
-# Pines de los motores (números GP de la Pico, no pines físicos)
-PIN_ENA, PIN_IN1, PIN_IN2 = 16, 17, 18   # Motor 1 (izquierdo)
-PIN_ENB, PIN_IN3, PIN_IN4 = 19, 20, 21   # Motor 2 (derecho)
+# El carro es tipo control remoto: un motor de TRACCION (mueve las ruedas) y un motor de DIRECCION
+# (dobla las ruedas de adelante; un resorte las regresa al centro cuando el motor se apaga).
+#
+# Pines de la Pico conectados al L298N (numeros GP, no pines fisicos)
+PIN_ENA, PIN_IN1, PIN_IN2 = 16, 17, 18   # Motor 1 -> OUT1 / OUT2
+PIN_ENB, PIN_IN3, PIN_IN4 = 19, 20, 21   # Motor 2 -> OUT3 / OUT4
+
+# ---- AJUSTES (cambialos segun lo que veas al probar) ----
+TRACCION_ES_MOTOR = 2          # 1 o 2: cual motor mueve el carro. El otro es la direccion.
+INVERTIR_TRACCION = False      # True si con pwm positivo el carro va hacia atras
+INVERTIR_DIRECCION = False     # True si dir -1 dobla a la derecha en vez de a la izquierda
 
 FREQ = 1000                           # frecuencia del PWM en Hz
-MIN_DUTY = int(500 / 1023 * 65535)    # ~32000: mínimo para que giren
-MAX_DUTY = 65535                      # máximo de giro
-TIEMPO_GIRO = 1000                    # ms que dura un giro
-GIRO_INTERNO = 0                      # nivel de la rueda de adentro al girar con dir: 0 = parada (sin reversa)
-POTENCIA_DEFECTO = 2                  # potencia de dir si el carro está parado
+MIN_DUTY = int(500 / 1023 * 65535)    # ~32000: minimo para que gire la traccion (nivel 1)
+MAX_DUTY = 65535                      # maximo (nivel 4)
+DUTY_DIRECCION = 65535                # fuerza del motor de direccion (100 % = dobla hasta el tope)
+TIEMPO_GIRO = 1000                    # ms que se mantienen dobladas las ruedas con dir -1 / dir 1
+TIEMPO_CENTRADO = 60                  # ms del empujon al lado contrario al volver a recto (0 = sin empujon)
+                                      # sube si las ruedas quedan torcidas hacia el ultimo giro;
+                                      # baja si se pasan del centro hacia el otro lado
+POTENCIA_DEFECTO = 2                  # potencia que usa dir si el carro esta parado
 #___________________________________________________________________________________________________________________#
 class Motor:
-    def __init__(self, pin_en, pin_a, pin_b):
+    def __init__(self, pin_en, pin_a, pin_b, invertir=False):
         self.en = PWM(Pin(pin_en)); self.en.freq(FREQ)
         self.a = Pin(pin_a, Pin.OUT)
         self.b = Pin(pin_b, Pin.OUT)
+        self.invertir = invertir
         self.mover(0)
 
+    def _sentido(self, adelante):
+        if self.invertir:
+            adelante = not adelante
+        self.a.value(1 if adelante else 0)
+        self.b.value(0 if adelante else 1)
+
     def mover(self, nivel):
-        """nivel: -4..4 (signo = sentido, 0 = parado)"""
+        """Traccion. nivel: -4..4 (signo = sentido, 0 = parado)"""
         if nivel == 0:
-            self.a.value(0); self.b.value(0)
-            self.en.duty_u16(0)
-            log("  motor: parado")
+            self.apagar()
             return
-        self.a.value(1 if nivel > 0 else 0)
-        self.b.value(0 if nivel > 0 else 1)
+        self._sentido(nivel > 0)
         paso = (MAX_DUTY - MIN_DUTY) / 3
         duty = int(MIN_DUTY + (abs(nivel) - 1) * paso)
         self.en.duty_u16(duty)
-        log("  motor: nivel", nivel, "| IN_A =", self.a.value(), "IN_B =", self.b.value(), "| duty =", duty)
+        log("  motor: nivel", nivel, "| duty =", duty)
+
+    def empujar(self, lado):
+        """Direccion. lado: -1 = izquierda, 1 = derecha, 0 = suelta (el resorte centra las ruedas)"""
+        if lado == 0:
+            self.apagar()
+            return
+        self._sentido(lado < 0)
+        self.en.duty_u16(DUTY_DIRECCION)
+        log("  direccion:", "izquierda" if lado < 0 else "derecha")
+
+    def apagar(self):
+        self.a.value(0); self.b.value(0)
+        self.en.duty_u16(0)
 #___________________________________________________________________________________________________________________#
-izq = Motor(PIN_ENA, PIN_IN1, PIN_IN2)
-der = Motor(PIN_ENB, PIN_IN3, PIN_IN4)
-nivel_actual = 0   # última potencia pedida (negativa = reversa)
+_m1 = Motor(PIN_ENA, PIN_IN1, PIN_IN2)
+_m2 = Motor(PIN_ENB, PIN_IN3, PIN_IN4)
+traccion, direccion = (_m1, _m2) if TRACCION_ES_MOTOR == 1 else (_m2, _m1)
+traccion.invertir = INVERTIR_TRACCION
+direccion.invertir = INVERTIR_DIRECCION
+
+nivel_actual = 0   # ultima potencia de traccion (negativa = reversa)
+lado_actual = 0    # hacia donde estan dobladas las ruedas (-1, 0, 1)
+
+
+# ---------------------------------------------------------------- funciones para los patrones
+def avanzar(nivel):
+    """Traccion a ese nivel (-4..4) sin tocar la direccion."""
+    global nivel_actual
+    nivel_actual = nivel
+    traccion.mover(nivel)
+
+
+def doblar(lado):
+    """Ruedas de adelante: -1 izquierda, 0 recto, 1 derecha. Se quedan asi hasta que se cambie.
+    Al volver a recto despues de un giro, da un empujon corto al lado contrario para centrarlas."""
+    global lado_actual
+    if lado == 0 and lado_actual != 0 and TIEMPO_CENTRADO > 0:
+        direccion.empujar(-lado_actual)
+        sleep_ms(TIEMPO_CENTRADO)
+    direccion.empujar(lado)
+    lado_actual = lado
+
 
 def parar():
-    """Detiene los dos motores (lo usan otros módulos, como comportamiento)."""
-    global nivel_actual
-    nivel_actual = 0
-    izq.mover(0); der.mover(0)
+    """Detiene todo: traccion parada y ruedas al centro (lo usan el servidor y los patrones)."""
+    avanzar(0)
+    doblar(0)
 
+
+# ---------------------------------------------------------------- comandos pwm y dir
 def cmd_pwm(v):
-    global nivel_actual
     if v not in range(-4, 5):
         print("pwm fuera de rango (-4 a 4)"); return
-    nivel_actual = v
-    izq.mover(v); der.mover(v)
+    avanzar(v)                        # solo la traccion: la direccion queda como estaba
     print("pwm", v)
 
+
 def cmd_dir(v):
-    global nivel_actual
     if v not in (-1, 0, 1, 2):
         print("dir fuera de rango (-1,0,1,2)"); return
     n = abs(nivel_actual) if nivel_actual != 0 else POTENCIA_DEFECTO
     if v == 0:                        # recto
-        nivel_actual = n
-        izq.mover(n); der.mover(n)
-    elif v == -1:                     # izquierda
-        print("girando izquierda...")
-        izq.mover(GIRO_INTERNO); der.mover(n)
-        sleep_ms(TIEMPO_GIRO); izq.mover(n)
-        nivel_actual = n
+        doblar(0)
+        avanzar(n)
+    elif v in (-1, 1):                # izquierda / derecha: dobla, avanza y vuelve a recto
+        print("girando", "izquierda..." if v == -1 else "derecha...")
+        doblar(v)
+        avanzar(n)
+        sleep_ms(TIEMPO_GIRO)
+        doblar(0)
         print("giro terminado")
-    elif v == 1:                      # derecha
-        print("girando derecha...")
-        izq.mover(n); der.mover(GIRO_INTERNO)
-        sleep_ms(TIEMPO_GIRO); der.mover(n)
-        nivel_actual = n
-        print("giro terminado")
-    elif v == 2:                      # retroceder
-        nivel_actual = -n
-        izq.mover(-n); der.mover(-n)
+    elif v == 2:                      # retroceder, con las ruedas rectas
+        doblar(0)
+        avanzar(-n)
     print("dir", v)
 
 """
-Explicación del código para facilitar la guía.
+Explicacion del codigo
 
-Pin sirve para controlar pines digitales (encendido/apagado) y PWM para generar la señal modulada. sleep_ms pausa el programa unos milisegundos.
-Las constantes definen cómo se comporta el carro:
-PIN_ENA, PIN_IN1, PIN_IN2 (y los del motor 2) son los pines de la Pico conectados al L298N.
-FREQ = 1000: la señal PWM se repite 1000 veces por segundo.
-MIN_DUTY: el enunciado dice que el mínimo es ~500 en escala 0-1023, pero la Pico trabaja en 0-65535, así que se convierte con una regla de tres (≈32000).
-MAX_DUTY = 65535: potencia máxima.
-TIEMPO_GIRO: cuánto dura un giro, en milisegundos.
+El carro es tipo control remoto: un motor de traccion (el que mueve el carro hacia adelante o atras) y un
+motor de direccion (el que dobla las ruedas de adelante). Los dos estan conectados al L298N: uno en
+OUT1/OUT2 (motor 1) y el otro en OUT3/OUT4 (motor 2). TRACCION_ES_MOTOR dice cual es cual.
 
-La clase Motor
-Representa un motor conectado al L298N. Cada motor usa tres pines: uno de Enable (PWM, controla la velocidad) y dos de Input (controlan el sentido).
-__init__ crea esos pines, configura la frecuencia del PWM y deja el motor parado.
-mover(nivel) recibe un número de -4 a 4:
-Si es 0, pone ambos Inputs en 0 y el duty en 0: motor apagado.
-Si es positivo, IN_A = 1 y IN_B = 0: gira hacia adelante. Si es negativo, al revés: gira hacia atrás.
-La velocidad se calcula así: el nivel 1 corresponde a MIN_DUTY, el nivel 4 a MAX_DUTY, y los niveles 2 y 3
-quedan repartidos en partes iguales entre ambos (paso es el tamaño de cada escalón). Se usa abs(nivel) porque el signo solo decide el sentido, no la velocidad.
+Clase Motor
+- mover(nivel): para la traccion. El signo decide el sentido y el valor la velocidad: el nivel 1 usa
+  MIN_DUTY, el 4 usa MAX_DUTY y el 2 y 3 quedan repartidos en partes iguales entre ambos.
+- empujar(lado): para la direccion. Le da toda la fuerza (DUTY_DIRECCION) hacia un lado para doblar las
+  ruedas hasta el tope. Con lado 0 se apaga y el resorte del carro regresa las ruedas al centro.
+- TIEMPO_CENTRADO: el resorte de la direccion a veces no endereza del todo las ruedas despues de un giro.
+  Por eso, al volver a recto, el motor de direccion empuja un instante hacia el lado contrario.
+- INVERTIR_TRACCION / INVERTIR_DIRECCION corrigen el sentido si los cables del motor quedaron al reves,
+  sin tener que cambiarlos en el L298N.
 
-Se crean dos objetos, uno por rueda. nivel_actual recuerda la última potencia que se pidió con pwm, para que dir sepa con qué fuerza girar.
+Comandos
+- pwm v (-4 a 4): solo cambia la velocidad de la traccion. Ya no mueve la direccion.
+- dir 0: ruedas rectas y avanza (si estaba parado, con POTENCIA_DEFECTO).
+- dir -1 / dir 1: dobla a la izquierda / derecha, avanza durante TIEMPO_GIRO y regresa las ruedas a recto.
+- dir 2: ruedas rectas y retrocede.
 
-cmd_pwm(v)
-Valida que el valor esté entre -4 y 4. Si es válido, guarda el nivel en nivel_actual y manda ese mismo nivel a ambos motores,
-así el carro avanza o retrocede en línea recta. Con pwm 0 se detiene.
-
-cmd_dir(v)
-Primero valida que sea -1, 0, 1 o 2. Luego decide la potencia n: usa nivel_actual, y si el carro está parado usa 2 como valor por defecto, para que el giro se note. Después:
-0 (recto): los dos motores a la misma velocidad.
--1 (izquierda): el motor izquierdo se detiene y el derecho sigue andando. Esa diferencia hace que el carro gire hacia la izquierda. Se espera TIEMPO_GIRO y se vuelve a
-encender el izquierdo, para que el carro siga recto después del giro.
-1 (derecha): lo mismo, pero con los motores invertidos.
-2 (retroceder): ambos motores con nivel negativo.
-
-El programa se queda esperando que escribas algo en la consola de Thonny. Luego .strip() quita espacios de los extremos, .lower() pasa todo a minúsculas y .split() separa el texto en palabras.
-Así "PWM 3" se vuelve ["pwm", "3"].
-Si no hay exactamente dos partes, muestra el formato correcto y vuelve a pedir.
-El try/except intenta convertir el valor a entero; si escribes pwm abc, avisa del error en vez de que el programa se caiga.
-Finalmente, según la primera palabra llama a cmd_pwm o cmd_dir; si no reconoce el comando, lo dice.
-
-NOTA: AL FINALIZAR ESTE CODIGO SE HICIERON MAS CAMBIOS PARA QUE QUEDE TODO TIPO DE INPUT EN UN SOLO CODIGO, TODO SE EJECUTA CON MAIN MENU
+Funciones para los patrones: avanzar(nivel), doblar(lado) y parar().
 """
